@@ -1,4 +1,13 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<script>
+/* The engine-only build cannot display the full truck. Open the full dataset in its own page. */
+document.addEventListener('click', function (event) {
+  if (event.target.closest('#mode-catalog')) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    window.location.assign('index.html?full=1');
+  }
+}, true);
+</script>
 <title>VNL Truck Build</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -104,6 +113,23 @@ canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: bl
   </main>
 </div>
 
+<script>
+window.__vnlViewerError = function(message) {
+  let el = document.getElementById('vnl-render-error');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'vnl-render-error';
+    el.style.cssText = 'position:absolute;inset:12px;z-index:99;border:1px solid #d9a781;background:#17202b;color:#fff;border-radius:9px;padding:22px;overflow:auto;font:14px/1.55 system-ui,sans-serif;';
+    document.querySelector('main')?.appendChild(el);
+  }
+  el.replaceChildren();
+  const h = document.createElement('h2');h.textContent='3D viewer problem';
+  const p = document.createElement('p');p.textContent=String(message);
+  const b = document.createElement('button');b.textContent='Reload simulator';b.style.cssText='padding:10px 16px;border-radius:6px;border:0;background:#e37a46;color:#fff;font-weight:bold';
+  b.onclick=()=>location.reload();el.append(h,p,b);
+};
+window.__vnlClearError = function(){document.getElementById('vnl-render-error')?.remove();};
+window.addEventListener('unhandledrejection',e=>window.__vnlViewerError('Startup error: '+String(e.reason?.message||e.reason)));
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
@@ -117,15 +143,25 @@ async function __load() { const idx = await (await fetch('d13_data_index.json'))
 <script src="d13-workshop.js"></script>
 <script>
 __load().then(function () {
+  if (typeof THREE === 'undefined') throw Error('Three.js did not load. Open the HTML in Chrome with an internet connection.');
+  if (!THREE.OrbitControls) throw Error('OrbitControls did not load. Check internet access and try again.');
+  if (!window.D13Physics || !window.D13Motion || !window.D13Tools || !window.D13Effects || !window.createD13Workshop) {
+    throw Error('A D13 workshop script was missing or blocked. Use the updated fixed Android file.');
+  }
   const $ = (id) => document.getElementById(id);
   function b64(s, Type) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Type(u.buffer); }
   const canvas = $('gl');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const mobileGraphics = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 760;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobileGraphics, alpha: false, powerPreference: mobileGraphics ? 'low-power' : 'default' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobileGraphics ? 1 : 1.5));
+  renderer.setClearColor(0x17202b, 1);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 20, 80000);
   const controls = new THREE.OrbitControls(camera, canvas);
   controls.enableDamping = true;
+  controls.minDistance = 65;
+  controls.maxDistance = 55000;
+  controls.zoomSpeed = 0.85;
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8a96a3, 0.85));
   const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(-1500, 2500, 3000); scene.add(sun);
   // truck coords: X front->rear, Y right, Z up from ground
@@ -244,22 +280,32 @@ __load().then(function () {
   });
   // camera framing
   const box = new THREE.Box3().setFromObject(root); const c = box.getCenter(new THREE.Vector3()); const size = box.getSize(new THREE.Vector3()).length();
-  function home() { camera.position.set(c.x - size * 0.95, c.y + size * 0.55, c.z - size * 0.95); controls.target.copy(c); controls.update(); }
+  function home() { camera.near = 20; camera.far = 80000; camera.position.set(c.x - size * 0.95, c.y + size * 0.55, c.z - size * 0.95); controls.target.copy(c); controls.update(); camera.updateProjectionMatrix(); }
   $('iso').addEventListener('click', () => { if(lab && lab.active) { lab.enable(true); } else home(); }); home();
   function resize() { const w = canvas.clientWidth, h = canvas.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
   new ResizeObserver(resize).observe(canvas); resize();
   lab = window.createD13Workshop({DATA, items, root, scene, camera, controls, canvas, sysOn, applyVis, home});
-  (function loop() { controls.update(); if(lab) lab.tick(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+  // In standalone builds the engine lab can initialize before `lab` is assigned.
+  // Apply visibility again so the starting view agrees with the selected tab.
+  applyVis();
+  let lastFrame = 0, runningFrames = true;
+  canvas.addEventListener('webglcontextlost', e => {
+    e.preventDefault(); runningFrames = false;
+    window.__vnlViewerError('The phone lost its 3D graphics context. Close other heavy browser tabs, then reload the simulator.');
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    runningFrames = true; window.__vnlClearError(); resize(); home();
+  });
+  (function loop(t) {
+    requestAnimationFrame(loop);
+    if (!runningFrames || (mobileGraphics && t-lastFrame < 32)) return;
+    lastFrame = t;
+    try { controls.update(); if (lab) lab.tick(); renderer.render(scene, camera); }
+    catch (e) { runningFrames = false; console.error(e); window.__vnlViewerError('3D rendering stopped: ' + (e?.message || e)); }
+  })();
 }).catch(function(err) {
-  const area = document.querySelector('main');
-  if (area) {
-    const msg = document.createElement('div');
-    msg.style.cssText = 'position:absolute;inset:16px;display:flex;flex-direction:column;gap:12px;justify-content:center;padding:24px;background:var(--panel);color:var(--ink);font:14px/1.5 sans-serif;z-index:9';
-    const h=document.createElement('h2'); h.textContent='The 3D viewer could not start.';
-    const p=document.createElement('p'); p.textContent='Use a WebGL-capable browser with internet access to load Three.js. For the extracted multi-file project, use a local web server or GitHub Pages rather than opening index.html directly.';
-    const detail=document.createElement('p'); detail.textContent='Error: '+String(err && err.message || err);
-    msg.append(h,p,detail);area.append(msg);
-  }
+  console.error('VNL loading error:',err);
+  window.__vnlViewerError('The 3D viewer could not start: '+String(err && err.message || err));
 });
 </script>
 
