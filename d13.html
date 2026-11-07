@@ -1,0 +1,266 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>VNL Truck Build</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-height workbench — part tree on the left (bottom sheet on phones), 3-D bench fills the rest, spec card floats over the bench. */
+:root {
+  --paper: #eef1f4;      /* drafting film */
+  --panel: #f8f9fb;
+  --ink: #17202b;
+  --ink-2: #4b5765;
+  --rule: #cfd6de;
+  --accent: #c8471d;     /* safety orange for the selected part */
+  --hi: #1f5fa8;         /* dimension blue */
+  --chip: #e2e7ed;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #11161c; --panel: #171e26; --ink: #e5eaf0; --ink-2: #9aa7b5; --rule: #2b3541;
+  --accent: #f07a45; --hi: #7fb0ee; --chip: #222b36; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #11161c; --panel: #171e26; --ink: #e5eaf0; --ink-2: #9aa7b5; --rule: #2b3541;
+  --accent: #f07a45; --hi: #7fb0ee; --chip: #222b36; color-scheme: dark }
+html, body { height: 100%; }
+body { background: var(--paper); color: var(--ink); font-family: var(--f-body); overflow: hidden; }
+.app { display: grid; grid-template-columns: minmax(250px, 320px) 1fr; height: 100%; }
+aside { background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; padding-block: 14px 0; }
+header h1 { font-family: var(--f-display); font-weight: 700; font-size: 1.6rem; letter-spacing: .02em; margin: 0; line-height: 1; text-wrap: balance; }
+header p { margin: .35rem 0 .8rem; color: var(--ink-2); font-size: .78rem; line-height: 1.4; }
+.search { width: 100%; box-sizing: border-box; padding: .5rem .6rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; font-size: .85rem; }
+.search:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--hi); outline-offset: 1px; }
+.tree { overflow-y: auto; flex: 1; margin-top: .6rem; padding-bottom: 1rem; min-height: 0; }
+.sys { border-top: 1px solid var(--rule); }
+.sys-head { display: flex; align-items: center; gap: .5rem; padding: .5rem 0; cursor: pointer; user-select: none; }
+.sys-head .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.sys-head .nm { font-family: var(--f-display); font-weight: 600; font-size: 1.02rem; letter-spacing: .03em; text-transform: uppercase; flex: 1; }
+.sys-head .ct { font-family: var(--f-mono); font-size: .7rem; color: var(--ink-2); }
+.sys-head input { accent-color: var(--accent); }
+.parts { list-style: none; margin: 0 0 .4rem; padding: 0; }
+.parts[hidden] { display: none; }
+.parts li button { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 4.6rem 1fr auto; gap: .4rem; width: 100%; padding: .28rem .35rem; border-radius: 4px; font-size: .78rem; cursor: pointer; }
+.parts li button:hover { background: var(--chip); }
+.parts li button.on { background: var(--accent); color: #fff; }
+.parts .pid { font-family: var(--f-mono); font-size: .68rem; opacity: .8; }
+.parts .q { font-family: var(--f-mono); font-size: .68rem; opacity: .7; }
+main { position: relative; min-width: 0; }
+canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.bar { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); top: 12px; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; pointer-events: none; }
+.bar > * { pointer-events: auto; }
+.ctl { display: flex; align-items: center; gap: .45rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: .35rem .6rem; font-size: .78rem; }
+.ctl label { font-family: var(--f-display); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; font-size: .82rem; }
+.ctl input[type=range] { width: 130px; accent-color: var(--accent); }
+.btn { all: unset; cursor: pointer; font-family: var(--f-display); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; font-size: .82rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: .4rem .7rem; }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.card { position: absolute; right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: min(360px, calc(100% - 24px)); max-height: 55%; overflow: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: .8rem .9rem; box-shadow: 0 6px 24px rgba(0,0,0,.12); }
+.card .pid { font-family: var(--f-mono); font-size: .72rem; color: var(--accent); }
+.card h2 { font-family: var(--f-display); font-weight: 700; font-size: 1.35rem; margin: .1rem 0 .4rem; line-height: 1.05; text-wrap: balance; }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem .7rem; margin: .4rem 0; font-size: .78rem; }
+.card dt { color: var(--ink-2); }
+.card dd { margin: 0; font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: .74rem; }
+.card p { font-size: .78rem; line-height: 1.45; margin: .35rem 0; }
+.card .src { color: var(--ink-2); font-size: .72rem; }
+.card .x { float: right; }
+.hint { position: absolute; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); font-size: .72rem; color: var(--ink-2); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: .3rem .5rem; }
+.axes { font-family: var(--f-mono); }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 1fr 42%; }
+  main { grid-row: 1; }
+  aside { grid-row: 2; border-right: none; border-top: 1px solid var(--rule); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  header p { display: none; }
+  .card { max-height: 48%; }
+  .hint { display: none; }
+  .ctl input[type=range] { width: 90px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+<link rel="stylesheet" href="d13-workshop.css">
+
+<div class="app">
+  <aside>
+    <header>
+      <h1>VOLVO D13 · ENGINE LAB</h1>
+      <p>Volvo VNL 300 6x4 day-cab tractor, built system by system: frame, front axle and steering, suspensions, tandem axles, wheels and tyres, wheel ends and brakes, differentials, air brake system, clutch, I-Shift transmission, main driveshaft, the Volvo D13 engine, the cooling package (radiator, charge air cooler, fan, hoses) and the air intake (air cleaner above the right front wheel, clean-air duct to the turbo), the fuel tank with its lines and the exhaust aftertreatment (turbo elbow, flex, downpipe, one-box DOC / DPF / SCR under the right door, tailpipe, DEF tank, pump and doser), and the electrical power package (battery box with three batteries on the left rail, main battery cables under the frame rails and the rear engine crossmember to the starter, alternator lead), plus the engine and transmission sensors, the engine lines and hoses (turbo oil, EGR coolant, crankcase vent, compressor intake, power steering reservoir and hoses), the AHI doser, the ACM and the I-Shift air supply; v15 adds the day cab and hood (body, mounts, steps, doors and glass, dash, steering, pedals, HVAC, seats, hood, grille, bumper), every air line into the cab, and the heater, DEF coolant, vent and A/C lines; v16 adds the five wiring harnesses (engine, transmission, chassis, aftertreatment, cab) with a plug on every electrical connector, the firewall bulkhead, VECU, ABS unit, lamps, trailer socket, horn, wiper and washer; v17 replaces the blocky parts with real shapes (slack adjusters, chambers, S-cams, I-beam axle, knuckles, steering gear, engine accessories, housings, control units, fan, fifth wheel, seats, wheel, mirrors, bumper, batteries). Tap a part for its size, torque, what it bolts to and where the size came from. Values marked est. are estimates.</p>
+    </header>
+    <div class="lab-switch"><button id="mode-catalog" aria-pressed="true">Full truck explorer</button><button id="mode-lab" aria-pressed="false">D13 workbench</button></div>
+    <div id="d13-panel" hidden></div>
+    <input id="q" class="search" type="search" placeholder="Find a part: crossmember, saddle, M16, XM-004…" autocomplete="off">
+    <div id="tree" class="tree"></div>
+  </aside>
+  <main>
+    <canvas id="gl"></canvas>
+    <div class="bar">
+      <div class="ctl"><label for="ex">Explode</label><input id="ex" type="range" min="0" max="100" value="0"></div>
+      <button id="xr" class="btn" aria-pressed="false">X-ray</button>
+      <button id="iso" class="btn">Reset view</button>
+      <span class="ctl axes" id="side">Front = bumper end · Right = passenger side</span>
+    </div>
+    <div id="card" class="card" hidden></div>
+    <div class="hint">Drag to orbit · pinch or scroll to zoom · right-drag to pan</div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+let DATA = null;
+async function __load() { const idx = await (await fetch('d13_data_index.json')).json(); const parts = await Promise.all(idx.files.map((f) => fetch(f).then((r) => r.json()))); DATA = { meshes: [].concat(...parts.map((p) => p.meshes)), parts: idx.parts, systems: idx.systems }; }
+</script>
+<script src="d13-physics.js"></script>
+<script src="d13-motion.js"></script>
+<script src="d13-tools.js"></script>
+<script src="d13-effects.js"></script>
+<script src="d13-workshop.js"></script>
+<script>
+__load().then(function () {
+  const $ = (id) => document.getElementById(id);
+  function b64(s, Type) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Type(u.buffer); }
+  const canvas = $('gl');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, 1, 20, 80000);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a96a3, 0.85));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(-1500, 2500, 3000); scene.add(sun);
+  // truck coords: X front->rear, Y right, Z up from ground
+  const root = new THREE.Group();
+  root.matrix.set(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1); // X->x, Z->y, Y->-z
+  root.matrixAutoUpdate = false;
+  scene.add(root);
+
+  const geos = DATA.meshes.map((m) => {
+    const g = new THREE.BufferGeometry();
+    const v = b64(m.v, Int16Array); const pos = new Float32Array(v.length);
+    for (let i = 0; i < v.length; i++) pos[i] = v[i] * m.q;
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(new THREE.BufferAttribute(m.big ? b64(m.f, Uint32Array) : b64(m.f, Uint16Array), 1));
+    g.computeVertexNormals();
+    return g;
+  });
+  const items = [];   // {part, mesh, base, ex}
+  let lab = null;
+  const bySys = {};
+  const sysOn = {};
+  DATA.parts.forEach((p, pi) => {
+    const col = new THREE.Color(`rgb(${p.c[0]},${p.c[1]},${p.c[2]})`);
+    const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.62, metalness: 0.15, side: THREE.DoubleSide, flatShading: false });
+    p.inst.forEach((m, k) => {
+      const mesh = new THREE.Mesh(geos[p.m], mat);
+      const M = new THREE.Matrix4(); M.set(m[0],m[1],m[2],m[3], m[4],m[5],m[6],m[7], m[8],m[9],m[10],m[11], 0,0,0,1);
+      mesh.matrixAutoUpdate = false; mesh.matrix.copy(M);
+      mesh.userData = { pi, ki: k, base: M.clone(), ex: new THREE.Vector3(...p.ex[k]) };
+      root.add(mesh);
+      items.push(mesh);
+    });
+    p.mat = mat; p.baseColor = col.clone();
+    (bySys[p.s] = bySys[p.s] || []).push(pi);
+  });
+
+  // part tree
+  const tree = $('tree');
+  DATA.systems.forEach((s) => {
+    sysOn[s.id] = true;
+    const wrap = document.createElement('div'); wrap.className = 'sys';
+    const head = document.createElement('div'); head.className = 'sys-head';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = true; cb.id = 'sys-' + s.id; cb.setAttribute('aria-label', 'Show ' + s.name);
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    cb.addEventListener('change', () => { sysOn[s.id] = cb.checked; applyVis(); });
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = `rgb(${s.c.join(',')})`;
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = s.name;
+    const ct = document.createElement('span'); ct.className = 'ct'; ct.textContent = (bySys[s.id] || []).length;
+    head.append(cb, sw, nm, ct);
+    const ul = document.createElement('ul'); ul.className = 'parts'; ul.hidden = true;
+    (bySys[s.id] || []).forEach((pi) => {
+      const p = DATA.parts[pi];
+      const li = document.createElement('li'); const b = document.createElement('button');
+      b.innerHTML = `<span class="pid"></span><span class="n"></span><span class="q"></span>`;
+      b.children[0].textContent = p.id; b.children[1].textContent = p.n; b.children[2].textContent = '×' + p.qty;
+      b.dataset.pi = pi; b.addEventListener('click', () => select(pi, true));
+      p.btn = b; p.li = li; li.append(b); ul.append(li);
+    });
+    head.addEventListener('click', () => { ul.hidden = !ul.hidden; });
+    wrap.append(head, ul); tree.append(wrap);
+    s.ul = ul;
+  });
+
+  let xray = false, sel = -1;
+  function applyVis() {
+    items.forEach((m) => { m.visible = !!sysOn[DATA.parts[m.userData.pi].s] && (!lab || lab.isVisible(m)); });
+    DATA.parts.forEach((p, pi) => {
+      const on = sel === pi;
+      p.mat.color.copy(on ? new THREE.Color(0xd8461a) : p.baseColor);
+      p.mat.emissive = new THREE.Color(on ? 0x3a0d00 : 0x000000);
+      const ghost = xray && sel !== -1 && !on;
+      p.mat.transparent = ghost || (xray && sel === -1);
+      p.mat.opacity = ghost ? 0.08 : (xray && sel === -1 ? 0.35 : 1);
+      p.mat.depthWrite = !p.mat.transparent;
+      p.mat.needsUpdate = true;
+    });
+  }
+  function select(pi, fromList, k) {
+    if (sel >= 0 && DATA.parts[sel].btn) DATA.parts[sel].btn.classList.remove('on');
+    sel = pi;
+    const card = $('card');
+    if (pi < 0) { card.hidden = true; applyVis(); return; }
+    const p = DATA.parts[pi];
+    if (p.btn) { p.btn.classList.add('on'); const sys = DATA.systems.find((s) => s.id === p.s); if (sys) sys.ul.hidden = false; if (!fromList) p.btn.scrollIntoView({ block: 'nearest' }); }
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    card.innerHTML = `<button class="btn x" id="cx" aria-label="Close">✕</button><div class="pid">${esc(p.id)} · ${esc(p.sn)}</div><h2>${esc(p.n)}</h2>
+      <dl><dt>Qty / truck</dt><dd>${p.qty}</dd><dt>Envelope</dt><dd>${esc(p.size)} mm</dd>${p.mat_ ? `<dt>Material</dt><dd>${esc(p.mat_)}</dd>` : ''}
+      ${p.k.map((k) => `<dt>${esc(k[0])}</dt><dd>${esc(k[1])}</dd>`).join('')}</dl>
+      ${p.mt ? `<p><b>Mates with:</b> ${esc(p.mt)}</p>` : ''}${p.nt ? `<p>${esc(p.nt)}</p>` : ''}${p.src ? `<p class="src">Size source: ${esc(p.src)}</p>` : ''}`;
+    card.hidden = false;
+    $('cx').addEventListener('click', () => select(-1));
+    applyVis();
+    if(lab && lab.active) { card.hidden = true; lab.onSelect(pi, k); }
+  }
+  // picking
+  const ray = new THREE.Raycaster(); let down = null;
+  canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera({ x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -((e.clientY - r.top) / r.height) * 2 + 1 }, camera);
+    const vis = items.filter((m) => m.visible && (!xray || sel === -1 || m.userData.pi === sel || true));
+    const hit = ray.intersectObjects(vis, false).find((h) => !(xray && sel !== -1 && h.object.userData.pi !== sel && h.object.material.opacity < 0.2));
+    select(hit ? hit.object.userData.pi : -1, false, hit ? hit.object.userData.ki : null);
+  });
+  $('ex').addEventListener('input', () => {
+    if (lab && lab.active) return;
+    const t = $('ex').value / 100;
+    items.forEach((m) => { const M = m.userData.base.clone(); const e = m.userData.ex; M.elements[12] += e.x * t; M.elements[13] += e.y * t; M.elements[14] += e.z * t; m.matrix.copy(M); });
+  });
+  $('xr').addEventListener('click', () => { xray = !xray; $('xr').setAttribute('aria-pressed', String(xray)); applyVis(); });
+  $('q').addEventListener('input', () => {
+    const q = $('q').value.trim().toLowerCase();
+    DATA.parts.forEach((p) => { if (p.li) p.li.hidden = q && !(p.n.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)); });
+    DATA.systems.forEach((s) => { if (q) s.ul.hidden = false; });
+  });
+  // camera framing
+  const box = new THREE.Box3().setFromObject(root); const c = box.getCenter(new THREE.Vector3()); const size = box.getSize(new THREE.Vector3()).length();
+  function home() { camera.position.set(c.x - size * 0.95, c.y + size * 0.55, c.z - size * 0.95); controls.target.copy(c); controls.update(); }
+  $('iso').addEventListener('click', () => { if(lab && lab.active) { lab.enable(true); } else home(); }); home();
+  function resize() { const w = canvas.clientWidth, h = canvas.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  new ResizeObserver(resize).observe(canvas); resize();
+  lab = window.createD13Workshop({DATA, items, root, scene, camera, controls, canvas, sysOn, applyVis, home});
+  (function loop() { controls.update(); if(lab) lab.tick(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+}).catch(function(err) {
+  const area = document.querySelector('main');
+  if (area) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'position:absolute;inset:16px;display:flex;flex-direction:column;gap:12px;justify-content:center;padding:24px;background:var(--panel);color:var(--ink);font:14px/1.5 sans-serif;z-index:9';
+    const h=document.createElement('h2'); h.textContent='The 3D viewer could not start.';
+    const p=document.createElement('p'); p.textContent='Use a WebGL-capable browser with internet access to load Three.js. For the extracted multi-file project, use a local web server or GitHub Pages rather than opening index.html directly.';
+    const detail=document.createElement('p'); detail.textContent='Error: '+String(err && err.message || err);
+    msg.append(h,p,detail);area.append(msg);
+  }
+});
+</script>
+
+</body></html>
