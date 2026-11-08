@@ -1,0 +1,98 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b1119"><title>D13 3D rendering check</title><style>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Arial;color:#f4f7fa;background:#0b1119}#app{height:100%;position:relative;overflow:hidden}canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}#top{position:absolute;z-index:3;top:0;left:0;right:0;padding:12px max(12px,env(safe-area-inset-right));background:linear-gradient(#0b1119f5,#0b1119b8,transparent);pointer-events:none}#top>*{pointer-events:auto}h1{margin:0;font-size:18px;letter-spacing:.3px}p{margin:5px 0;color:#c3d0df;font-size:12px}#status{font:12px/1.5 ui-monospace,SFMono-Regular,monospace;padding:8px 10px;white-space:pre-wrap;word-break:break-word;background:#152638;border:1px solid #45607a;border-radius:8px;color:#cbf1fd;max-height:170px;overflow:auto}#controls{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}button{padding:9px 11px;border:1px solid #60758b;background:#223346;color:#f4f7fa;border-radius:7px;font:bold 12px system-ui}button:active{background:#e36d3b}#bottom{position:absolute;z-index:2;bottom:max(12px,env(safe-area-inset-bottom));left:12px;right:12px;color:#e0e9f2;font-size:12px;text-shadow:0 1px 3px black;pointer-events:none}#bottom div{display:inline-block;background:#112236bc;border:1px solid #2b475f;border-radius:7px;padding:5px 8px}#fatal{position:absolute;z-index:5;top:37%;left:12px;right:12px;padding:18px;border-radius:12px;background:#6b1c26;color:#fff;font-size:14px;line-height:1.6;display:none}
+</style></head><body><div id="app"><canvas id="view"></canvas><div id="top"><h1>Volvo D13 — 3D Rendering Check</h1><p>Renders original uploaded mesh data. No Three.js or workshop scripts needed.</p><div id="status" role="status">Page HTML loaded. Starting WebGL check…</div><div id="controls"><button id="engine">Test D13</button><button id="truck">Test Truck</button><button id="more">Show more parts</button><button id="reset">Reset camera</button><button id="copy">Copy diagnostics</button></div></div><div id="fatal"></div><div id="bottom"><div>Drag to rotate · pinch to zoom · Try this test in Chrome</div></div></div><script>
+(()=>{'use strict';
+ const el=document.getElementById('status'), fatal=document.getElementById('fatal'),canvas=document.getElementById('view');
+ const records=[];let gl=null, program=null, meshData=[],parts=[],allFiles=[],gpus=new Map(),shown=[],ctr=[0,0,0],range=1400,angle=-.8,pitch=.4,zoom=1,ready=false,frames=0,last=0,mode='engine',showMore=false,drawCalls=0; let viewport={width:0,height:0};
+ const note=(s)=>{const item='['+new Date().toLocaleTimeString()+'] '+s;records.push(item);el.textContent=records.slice(-9).join('\n');console.log(item)};
+ const failed=(s)=>{note('ERROR: '+s);fatal.style.display='block';fatal.textContent='ERROR: '+s+'\nSend a screenshot of this message.'};
+ window.addEventListener('error',(e)=>failed('JavaScript: '+(e.message||'unknown')));
+ window.addEventListener('unhandledrejection',e=>failed('Async: '+String(e.reason?.message||e.reason)));
+ const comp=(type,src)=>{const sh=gl.createShader(type);gl.shaderSource(sh,src);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error('Shader compile: '+gl.getShaderInfoLog(sh));return sh};
+ const vertex=`#version 300 es
+ in vec3 a_xyz;uniform mat4 u_mvp;uniform mat4 u_model;uniform float u_scale;out vec3 v_world;
+ void main(){vec4 p=vec4(a_xyz*u_scale,1.0);v_world=(u_model*p).xyz;gl_Position=u_mvp*p;}`;
+ const fragment=`#version 300 es
+ precision highp float;in vec3 v_world;uniform vec3 u_color;out vec4 outColor;
+ void main(){vec3 a=dFdx(v_world),b=dFdy(v_world);vec3 n=normalize(cross(a,b));
+ vec3 lit=normalize(vec3(.45,.82,.4));float light=.32+.68*abs(dot(n,lit));
+ vec3 col=pow(u_color,vec3(2.2));col=pow(col*light,vec3(1.0/2.2));outColor=vec4(col,1.0);}`;
+ const m4mul=(a,b)=>{let o=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let n=0;for(let k=0;k<4;k++)n+=a[k*4+i]*b[j*4+k];o[j*4+i]=n}return o};
+ const partMat=(a)=>new Float32Array([a[0],a[4],a[8],0,a[1],a[5],a[9],0,a[2],a[6],a[10],0,a[3],a[7],a[11],1]);
+ const rootMat=new Float32Array([1,0,0,0,0,0,-1,0,0,1,0,0,0,0,0,1]);
+ const persp=(f,asp,n,far)=>{let v=1/Math.tan(f/2),o=new Float32Array(16);o[0]=v/asp;o[5]=v;o[10]=(far+n)/(n-far);o[11]=-1;o[14]=2*far*n/(n-far);return o};
+ const norm=(v)=>{const l=Math.hypot(...v)||1;return v.map(q=>q/l)};
+ const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+ const sub=(a,b)=>a.map((x,i)=>x-b[i]);
+ const look=(eye,target,up)=>{let z=norm(sub(eye,target)),x=norm(cross(up,z)),y=cross(z,x);return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-x.reduce((s,v,i)=>s+v*eye[i],0),-y.reduce((s,v,i)=>s+v*eye[i],0),-z.reduce((s,v,i)=>s+v*eye[i],0),1])};
+ const from64=(s,Type)=>{const bin=atob(s),b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return new Type(b.buffer)};
+ const color=(p)=>new Float32Array((p.c||[170,175,185]).map(n=>Math.max(0,Math.min(255,n))/255));
+ function useMesh(m){if(!gpus.has(m)){
+   const v=from64(m.v,Int16Array),indices=from64(m.f,m.big?Uint32Array:Uint16Array);
+   const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+   const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);
+   gl.enableVertexAttribArray(program.a);gl.vertexAttribPointer(program.a,3,gl.SHORT,false,0,0);
+   const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,indices,gl.STATIC_DRAW);
+   gl.bindVertexArray(null);
+   gpus.set(m,{vao,count:indices.length,type:m.big?gl.UNSIGNED_INT:gl.UNSIGNED_SHORT});
+ }return gpus.get(m)};
+ const choosePart=(p)=> mode==='truck'?(showMore?true:['G01','G07','R01','R03','R05','K01','K02','K03','H01','C01','I01','X01','F01','E01','E08','T02'].includes(p.s))
+ : (showMore?true:['E01','E03','E04','E05','E06','E07','E08','E09'].includes(p.s) && !['EBK-002','EBK-003','EBK-004'].includes(p.id));
+ async function fetchJSON(path){note('Downloading '+path+'…');const r=await fetch(path,{cache:'no-store'});if(!r.ok)throw Error(path+' returned HTTP '+r.status);return await r.json()}
+ function bounds(list){let min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];for(const p of list){
+   const m=meshData[p.m];if(!m)continue; const data=from64(m.v,Int16Array);let lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
+   for(let k=0;k<data.length;k+=3){for(let j=0;j<3;j++){const z=data[k+j]*m.q;lo[j]=Math.min(lo[j],z);hi[j]=Math.max(hi[j],z)}}
+   for(const a of p.inst){const M=partMat(a),W=m4mul(rootMat,M);for(const x of [lo[0],hi[0]])for(const y of [lo[1],hi[1]])for(const z of [lo[2],hi[2]]){
+     const v=[W[0]*x+W[4]*y+W[8]*z+W[12],W[1]*x+W[5]*y+W[9]*z+W[13],W[2]*x+W[6]*y+W[10]*z+W[14]];
+     for(let i=0;i<3;i++){min[i]=Math.min(min[i],v[i]);max[i]=Math.max(max[i],v[i])}
+   }}
+ }return {min,max,center:min.map((v,i)=>(v+max[i])/2),diag:Math.hypot(...max.map((v,i)=>v-min[i]))}}
+ async function load(which){ready=false;mode=which;shown=[];gpus.forEach(v=>{gl.deleteVertexArray(v.vao)});gpus.clear();
+ try{note('Loading '+(mode==='engine'?'D13 engine':'complete truck')+' index');const prefix=mode==='engine'?'d13_data_index.json':'vdata_index.json';let idx=await fetchJSON(prefix);
+  parts=idx.parts;allFiles=idx.files;meshData=[];
+  for(let j=0;j<allFiles.length;j++){const d=await fetchJSON(allFiles[j]);meshData.push(...d.meshes);note('Model data '+(j+1)+'/'+allFiles.length+' ready');}
+  note('Received '+parts.length+' part types / '+meshData.length+' mesh definitions');
+  await configure();
+ }catch(e){failed(e.message||String(e))}}
+ async function configure(){ready=false;shown=parts.filter(choosePart);note('Preparing '+shown.length+' visible part types…');
+  const b=bounds(shown);if(!Number.isFinite(b.diag)||b.diag<=0)throw Error('Bad geometry bounds');
+  ctr=b.center;range=b.diag;zoom=1;angle=-.8;pitch=.42;
+  let visibleInstances=0;for(const p of shown){useMesh(meshData[p.m]);visibleInstances+=p.inst.length;if(visibleInstances%100===0)await new Promise(r=>setTimeout(r,0))}
+  note('WebGL ready: '+visibleInstances+' real model instances. Rendering now.');ready=true;
+ }
+ function draw(now){requestAnimationFrame(draw);if(!ready||now-last<35)return;last=now;
+ try{
+  const rect=canvas.getBoundingClientRect(),w=Math.round(rect.width*devicePixelRatio),h=Math.round(rect.height*devicePixelRatio);if(w!==canvas.width||h!==canvas.height){canvas.width=Math.max(1,Math.min(w,1920));canvas.height=Math.max(1,Math.min(h,1280));gl.viewport(0,0,canvas.width,canvas.height)}
+  gl.clearColor(.045,.075,.11,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);
+  const distance=range*1.55*zoom;
+  const eye=[ctr[0]+Math.sin(angle)*Math.cos(pitch)*distance,ctr[1]+Math.sin(pitch)*distance,ctr[2]+Math.cos(angle)*Math.cos(pitch)*distance];
+  const vp=m4mul(persp(Math.PI/3.5,canvas.width/canvas.height,Math.max(.1,range*.001),range*50),look(eye,ctr,[0,1,0]));
+  gl.useProgram(program.p);drawCalls=0;
+  for(const p of shown){const m=meshData[p.m];const gpu=useMesh(m);gl.bindVertexArray(gpu.vao);gl.uniform1f(program.q,m.q);gl.uniform3fv(program.color,color(p));
+    for(const a of p.inst){const W=m4mul(rootMat,partMat(a));gl.uniformMatrix4fv(program.model,false,W);gl.uniformMatrix4fv(program.mvp,false,m4mul(vp,W));gl.drawElements(gl.TRIANGLES,gpu.count,gpu.type,0);drawCalls++}
+  }
+  gl.bindVertexArray(null);frames++;
+  if(frames===1||frames===16){note('FRAME RENDERED: '+drawCalls+' draw calls. WebGL '+gl.getParameter(gl.VERSION));}
+ }catch(e){ready=false;failed('Draw: '+(e.message||String(e)))}}
+ function init(){gl=canvas.getContext('webgl2',{antialias:false,alpha:false,powerPreference:'low-power'});if(!gl)throw Error('WebGL 2 unavailable (basic WebGL cube may use WebGL 1)');
+  const p=gl.createProgram();gl.attachShader(p,comp(gl.VERTEX_SHADER,vertex));gl.attachShader(p,comp(gl.FRAGMENT_SHADER,fragment));gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error('Shader link: '+gl.getProgramInfoLog(p));
+  program={p,a:gl.getAttribLocation(p,'a_xyz'),mvp:gl.getUniformLocation(p,'u_mvp'),model:gl.getUniformLocation(p,'u_model'),q:gl.getUniformLocation(p,'u_scale'),color:gl.getUniformLocation(p,'u_color')};
+  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;failed('WebGL context lost (likely GPU memory or driver reset)')});
+  note('WebGL 2 initialized');requestAnimationFrame(draw);load('engine');
+ }
+ let fingers=new Map(),lastSpan=0;
+ canvas.addEventListener('pointerdown',e=>{fingers.set(e.pointerId,[e.clientX,e.clientY]);canvas.setPointerCapture(e.pointerId)});
+ canvas.addEventListener('pointermove',e=>{if(!fingers.has(e.pointerId))return;const old=fingers.get(e.pointerId);const dx=e.clientX-old[0],dy=e.clientY-old[1];fingers.set(e.pointerId,[e.clientX,e.clientY]);
+  if(fingers.size===1){angle-=dx*.009;pitch=Math.max(-1.35,Math.min(1.35,pitch+dy*.007))}
+  else{const f=[...fingers.values()],span=Math.hypot(f[0][0]-f[1][0],f[0][1]-f[1][1]);if(lastSpan>0)zoom=Math.min(12,Math.max(.16,zoom*lastSpan/Math.max(10,span)));lastSpan=span;}
+ });
+ for(const ev of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(ev,e=>{fingers.delete(e.pointerId);lastSpan=0});
+ canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.16,Math.min(12,zoom*(e.deltaY>0?1.12:.89)))},{passive:false});
+ document.getElementById('engine').onclick=()=>load('engine');document.getElementById('truck').onclick=()=>load('truck');
+ document.getElementById('more').onclick=()=>{showMore=!showMore;document.getElementById('more').textContent=showMore?'Simplify parts':'Show more parts';configure().catch(e=>failed(e.message))};
+ document.getElementById('reset').onclick=()=>{angle=-.8;pitch=.42;zoom=1;note('Camera reset')};
+ document.getElementById('copy').onclick=async()=>{const msg=records.join('\n')+'\nUserAgent: '+navigator.userAgent+'\nCanvas: '+canvas.width+'x'+canvas.height;try{await navigator.clipboard.writeText(msg);note('Diagnostics copied')}catch(e){note('Clipboard denied: screenshot status instead')}};
+ try{init()}catch(e){failed(e.message||String(e))}
+})();
+</script></body></html>
