@@ -119,6 +119,101 @@ canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: bl
 </div>
 
 <script>
+/* D13/VNL reliable phone renderer: the same WebGL2 shader/data pipeline proven
+   on Android in D13_Render_Test.html. Three.js remains the scene graph,
+   raycaster, OrbitControls, motion and workshop logic. */
+function createReliableModelRenderer(canvas, DATA, root) {
+  const gl=canvas.getContext('webgl2', {antialias:false, alpha:false, powerPreference:'low-power', preserveDrawingBuffer:false});
+  if (!gl) throw Error('Reliable viewer needs WebGL 2; the working D13 rendering test confirmed it on this phone.');
+  function shader(type, source) {
+    const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error('3D shader: '+gl.getShaderInfoLog(sh));
+    return sh;
+  }
+  const vsrc=`#version 300 es
+    in vec3 a_xyz;
+    uniform mat4 u_model, u_pv; uniform float u_scale;
+    out vec3 v_world;
+    void main(){vec4 p=vec4(a_xyz*u_scale,1.);vec4 w=u_model*p;
+      v_world=w.xyz;gl_Position=u_pv*w;}`;
+  const fsrc=`#version 300 es
+    precision highp float;
+    in vec3 v_world;
+    uniform vec3 u_color; uniform float u_alpha;
+    out vec4 outColor;
+    void main(){vec3 n=normalize(cross(dFdx(v_world),dFdy(v_world)));
+      float light=.32+.68*abs(dot(n,normalize(vec3(.45,.82,.4))));
+      vec3 col=pow(pow(u_color,vec3(2.2))*light,vec3(1./2.2));
+      outColor=vec4(col,u_alpha);}`;
+  const pg=gl.createProgram();gl.attachShader(pg,shader(gl.VERTEX_SHADER,vsrc));gl.attachShader(pg,shader(gl.FRAGMENT_SHADER,fsrc));gl.linkProgram(pg);
+  if(!gl.getProgramParameter(pg,gl.LINK_STATUS))throw Error('3D shader link: '+gl.getProgramInfoLog(pg));
+  const uniforms={a:gl.getAttribLocation(pg,'a_xyz'), model:gl.getUniformLocation(pg,'u_model'),
+    pv:gl.getUniformLocation(pg,'u_pv'),scale:gl.getUniformLocation(pg,'u_scale'),
+    color:gl.getUniformLocation(pg,'u_color'),alpha:gl.getUniformLocation(pg,'u_alpha')};
+  const gpuMeshes=new Map(), colors=DATA.parts.map(p=>new Float32Array((p.c||[175,175,175]).map(v=>Math.max(0,Math.min(255,v))/255)));
+  const selectedColor=new Float32Array([216/255,70/255,26/255]);
+  function gpu(id){
+    if(gpuMeshes.has(id))return gpuMeshes.get(id);
+    const m=DATA.meshes[id],vs=atob(m.v),is=atob(m.f);
+    const v=new Int16Array(vs.length/2),indices=m.big?new Uint32Array(is.length/4):new Uint16Array(is.length/2);
+    // Reconstruct little-endian typed data directly, as in the successful diagnostic renderer.
+    const vb=new Uint8Array(v.buffer),ib=new Uint8Array(indices.buffer);
+    for(let i=0;i<vs.length;i++)vb[i]=vs.charCodeAt(i);
+    for(let i=0;i<is.length;i++)ib[i]=is.charCodeAt(i);
+    const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+    const buff=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buff);gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(uniforms.a);gl.vertexAttribPointer(uniforms.a,3,gl.SHORT,false,0,0);
+    const elem=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,elem);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,indices,gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    const o={vao,count:indices.length,type:m.big?gl.UNSIGNED_INT:gl.UNSIGNED_SHORT,scale:m.q};gpuMeshes.set(id,o);return o;
+  }
+  const pv=new THREE.Matrix4(), pvArray=new Float32Array(16), modelArray=new Float32Array(16);
+  let totalCalls=0,ctxLost=false,requestedWidth=1,requestedHeight=1;
+  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ctxLost=true;window.__vnlViewerError?.('WebGL graphics context lost. Reload the page.');});
+  canvas.addEventListener('webglcontextrestored',()=>{ctxLost=false;gpuMeshes.clear();window.__vnlClearError?.();location.reload();});
+  const adapter={
+    capabilities:{isWebGL2:true},info:{render:{calls:0}},
+    setPixelRatio(){},setClearColor(){},
+    setSize(w,h){
+      requestedWidth=Math.max(1,w);requestedHeight=Math.max(1,h);
+      const r=Math.min(window.devicePixelRatio||1,2);
+      const factor=Math.min(1,1920/(requestedWidth*r),1280/(requestedHeight*r));
+      canvas.width=Math.max(1,Math.round(requestedWidth*r*factor));
+      canvas.height=Math.max(1,Math.round(requestedHeight*r*factor));
+      gl.viewport(0,0,canvas.width,canvas.height);
+    },
+    render(scene,camera){
+      if(ctxLost)return;
+      camera.updateMatrixWorld(true);root.updateMatrixWorld(true);
+      pv.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
+      gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(.045,.075,.11,1);
+      gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(pg);pvArray.set(pv.elements);gl.uniformMatrix4fv(uniforms.pv,false,pvArray);
+      totalCalls=0;
+      for(const mesh of window.__vnl3dItems||[]){
+        if(!mesh.visible)continue;
+        const part=DATA.parts[mesh.userData.pi],geo=gpu(part.m),mat=mesh.material;
+        gl.bindVertexArray(geo.vao);
+        gl.uniform1f(uniforms.scale,geo.scale);
+        const selected=(mat?.emissive?.r||0)>0.01;
+        gl.uniform3fv(uniforms.color,selected?selectedColor:colors[mesh.userData.pi]);
+        gl.uniform1f(uniforms.alpha,Math.min(1,Math.max(0,mat?.opacity??1)));
+        gl.depthMask(!(mat?.transparent));
+        modelArray.set(mesh.matrixWorld.elements);
+        gl.uniformMatrix4fv(uniforms.model,false,modelArray);
+        gl.drawElements(gl.TRIANGLES,geo.count,geo.type,0);totalCalls++;
+      }
+      gl.depthMask(true);gl.bindVertexArray(null);
+      adapter.info.render.calls=totalCalls;
+    }
+  };
+  return adapter;
+}
+</script>
+
+<script>
 window.__vnlViewerError = function(message) {
   let el = document.getElementById('vnl-render-error');
   if (!el) {
@@ -219,14 +314,17 @@ __vnlPrerequisites().then(__load).then(function () {
   function b64(s, Type) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Type(u.buffer); }
   const canvas = $('gl');
   const mobileGraphics = window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 760;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobileGraphics, alpha: false, powerPreference: mobileGraphics ? 'low-power' : 'default' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobileGraphics ? 1 : 1.5));
-  renderer.setClearColor(0x17202b, 1);
+  // Direct WebGL2 was successfully tested with the exact original geometry on Android.
+  // Use it as the visible drawing backend on phones, keeping Three.js for every
+  // scene graph, mechanics, raycast, touch and workshop operation.
+  const rendererPreference = new URLSearchParams(location.search).get('renderer');
+  const directMode = rendererPreference === 'direct' || (mobileGraphics && rendererPreference !== 'three');
+  let renderer = null;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 20, 80000);
   const controls = new THREE.OrbitControls(camera, canvas);
   controls.enableDamping = true;
-  controls.minDistance = 65;
+  controls.minDistance = 15;
   controls.maxDistance = 55000;
   controls.zoomSpeed = 0.85;
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8a96a3, 0.85));
@@ -236,6 +334,11 @@ __vnlPrerequisites().then(__load).then(function () {
   root.matrix.set(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1); // X->x, Z->y, Y->-z
   root.matrixAutoUpdate = false;
   scene.add(root);
+  renderer = directMode
+    ? createReliableModelRenderer(canvas, DATA, root)
+    : new THREE.WebGLRenderer({canvas, antialias:!mobileGraphics,alpha:false,powerPreference:mobileGraphics?'low-power':'default'});
+  if(!directMode){renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,mobileGraphics?1:1.5));renderer.setClearColor(0x17202b,1);}
+
 
   const geos = DATA.meshes.map((m) => {
     const g = new THREE.BufferGeometry();
@@ -247,6 +350,10 @@ __vnlPrerequisites().then(__load).then(function () {
     return g;
   });
   const items = [];   // {part, mesh, base, ex}
+  // The reliable renderer uses the same THREE.Mesh objects, so repairs and
+  // animations affect the visible model without a second data/scene copy.
+  if(directMode)window.__vnl3dItems=items;
+
   let lab = null;
   const bySys = {};
   const sysOn = {};
@@ -369,7 +476,7 @@ __vnlPrerequisites().then(__load).then(function () {
       __vnlDone('3D: '+shown+'/'+items.length+' parts visible · reset complete');
     }catch(e){window.__vnlViewerError('Camera recovery failed: '+e.message);}
   };
-  __vnlDone('3D loaded: '+items.length+' instances · tap Find 3D model if blank');
+  __vnlDone((directMode?'Reliable WebGL2 renderer':'Three.js renderer')+' · '+items.filter(m=>m.visible).length+'/'+items.length+' instances visible');
   // In standalone builds the engine lab can initialize before `lab` is assigned.
   // Apply visibility again so the starting view agrees with the selected tab.
   applyVis();
